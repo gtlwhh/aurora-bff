@@ -1,0 +1,52 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# CORS：全放行（App 原生 HTTP + 浏览器开发均可用）
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Methods = "GET,POST,OPTIONS"
+    Access-Control-Allow-Headers = "Content-Type, x-ncm-cookie"
+
+# 统一路由：/api/xxx → 对应 function
+[[redirects]]
+  from = "/api/health"
+  to = "/.netlify/functions/health"
+  status = 200
+[[redirects]]
+  from = "/api/search"
+  to = "/.netlify/functions/search"
+  status = 200
+[[redirects]]
+  from = "/api/lyric"
+  to = "/.netlify/functions/lyric"
+  status = 200
+[[redirects]]
+  from = "/api/stream"
+  to = "/.netlify/functions/stream"
+  status = 200
+[[redirects]]
+  from = "/api/playlists"
+  to = "/.netlify/functions/playlists"
+  status = 200
+[[redirects]]
+  from = "/api/dynamic/next"
+  to = "/.netlify/functions/dynamic"
+  status = 200
+[[redirects]]
+  from = "/api/login/qr-create"
+  to = "/.netlify/functions/qr-create"
+  status = 200
+[[redirects]]
+  from = "/api/login/qr-check"
+  to = "/.netlify/functions/qr-check"
+  status = 200
+[[redirects]]
+  from = "/api/login/status"
+  to = "/.netlify/functions/login-status"
+  status = 200

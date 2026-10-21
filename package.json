@@ -1,0 +1,20 @@
+{
+  "name": "aurora-bff",
+  "version": "1.0.0",
+  "private": true,
+  "description": "极光音乐 BFF（Backend for Frontend）· 部署到 Vercel，App 端 CapacitorHttp 直连",
+  "scripts": {
+    "dev": "node dev-server.js",
+    "deploy": "netlify deploy --prod",
+    "start": "node dev-server.js"
+  },
+  "devDependencies": {
+    "vercel": "^65.0.0"
+  },
+  "dependencies": {
+    "NeteaseCloudMusicApi": "^4.32.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
