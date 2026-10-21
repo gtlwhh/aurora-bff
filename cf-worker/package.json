@@ -1,0 +1,17 @@
+{
+  "name": "aurora-bff-worker",
+  "version": "1.2.0",
+  "private": true,
+  "description": "极光音乐 BFF · Cloudflare Workers (Hono) · 网易云裸 /api 接口，纯 fetch 无 Node 依赖",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
