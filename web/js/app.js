@@ -458,31 +458,35 @@ async function refreshQqLoginState() {
 }
 
 function updateDynamicBar() {
-  // 双平台任一登录即可开启混合推荐
-  const on = isNeteaseLoggedIn() || isQqLoggedIn();
-  const hm = $('#btnHeartMode');
-  const fm = $('#btnPersonalFm');
-  const sh = $('#sideHeartMode');
-  const sf = $('#sidePersonalFm');
-  if (hm) hm.disabled = !on;
-  if (fm) fm.disabled = !on;
-  if (sh) sh.disabled = !on;
-  if (sf) sf.disabled = !on;
+  // 状态灯：只在心动模式 / 私人漫游进行中点亮，退出立刻熄灭且不占位
   const sts = $$('#dynamicState');
   if (!sts.length) return;
   sts.forEach(st => {
     if (dynamic) {
-      const name = dynamic.type === 'heartmix' ? '✨ 心动模式' : '📶 私人漫游';
+      const label = dynamic.label || (dynamic.type === 'heartmix' ? '心动模式' : '私人漫游');
+      const icon = (dynamic.label || dynamic.type) === '心动模式' || dynamic.type === 'heartmix' ? '✨' : '📶';
       const sides = dynamic.sides || [];
       const mixTxt = sides.length === 2 ? ' · 双平台混合'
         : sides.length === 1 ? ` · ${sides[0] === 'netease' ? '网易云' : 'QQ'}` : '';
-      st.textContent = name + mixTxt;
+      st.textContent = `${icon} ${label}${mixTxt}`;
+      st.title = '点击退出' + label;
       st.className = 'dyn-chip on';
     } else {
       st.textContent = '';
+      st.title = '';
       st.className = 'dyn-chip';
     }
   });
+}
+
+/** 退出心动 / 漫游：清会话、灭状态灯、回普通队列（队列本身的歌继续放完） */
+function exitDynamic(silent) {
+  if (!dynamic) return;
+  const label = dynamic.label || (dynamic.type === 'heartmix' ? '心动模式' : '私人漫游');
+  dynamic = null;
+  saveLocalPrefs({ dynamicSession: null });
+  updateDynamicBar();
+  if (!silent) toast('已退出' + label);
 }
 
 /** 重启后恢复动态队列上下文（服务端会话含缓冲，恢复后队列继续按需追加） */
@@ -508,22 +512,11 @@ function restoreDynamicSession() {
 }
 
 async function startDynamic(type) {
-  if (!isNeteaseLoggedIn() && !isQqLoggedIn()) {
-    toast('至少登录一个平台（网易云 / QQ）才能开启推荐', 'err');
-    return;
-  }
-
-  // 跨平台混合会话：网易云推荐 + QQ 推荐，混合成一个队列
+  // 网易云逻辑：不需要任何前置条件 —— 没在播歌也能直接开（无种子走全局推荐）
   let seed = null;
   const cur = state.current;
-  if (type === 'heartmix') {
-    if (!cur || cur.provider === 'local' || !(cur.nid || cur.gid)) {
-      toast('心动模式需要先播放一首在线歌曲（私人漫游无需）', 'err');
-      return;
-    }
-    seed = {};
-    // 带上曲目 id：服务端据此从 analysis.json 读 BPM，用于节奏相近的推荐
-    seed.trackId = cur.id;
+  if (cur && cur.provider !== 'local' && (cur.nid || cur.gid || cur.id)) {
+    seed = { trackId: cur.id };            // 服务端据此读 analysis.json 里的 BPM
     if (cur.provider === 'netease' && cur.nid) {
       let pid = cur.nid;
       try {
@@ -536,15 +529,21 @@ async function startDynamic(type) {
     } else if (cur.gid) {
       seed.seedMid = cur.gid;
     }
-  } else if (cur && cur.provider !== 'local' && cur.id) {
-    // 私人漫游：不传平台种子，但把曲目 id 带上，服务端只用来读 BPM
-    seed = { trackId: cur.id };
   }
 
+  // 心动模式在没有种子歌时无法做"相似"，按全局推荐发起（与网易云一致）
+  const useType = (type === 'heartmix' && !seed) ? 'personalfm' : type;
+
   try {
-    const r = await api.dynamicSession('mix', type, seed);
-    dynamic = { id: r.sessionId, platform: 'mix', type, extending: false };
-    saveLocalPrefs({ dynamicSession: { id: r.sessionId, platform: 'mix', type } });
+    const r = await api.dynamicSession('mix', useType, seed);
+    dynamic = {
+      id: r.sessionId,
+      platform: 'mix',
+      type: useType,
+      label: type === 'heartmix' ? '心动模式' : '私人漫游',   // 用户点的那个名字
+      extending: false
+    };
+    saveLocalPrefs({ dynamicSession: { id: r.sessionId, platform: 'mix', type: useType } });
     updateDynamicBar();
 
     const first = await api.dynamicNext('mix', r.sessionId, 4);
@@ -554,14 +553,14 @@ async function startDynamic(type) {
       updateDynamicBar();
       return;
     }
-    // 实际构成：双平台都出歌 → "已开启双平台混合推荐"；单侧 → 明确告知降级
     dynamic.sides = [...new Set(first.tracks.map(t => t.provider))].filter(p => p === 'netease' || p === 'qq');
+    // 直接把推回来的歌塞进队列，并立刻开始播
     state.queue = first.tracks.slice();
     state.queueIndex = 0;
     renderMain();
     playCurrent();
-    const typeName = type === 'heartmix' ? '心动模式' : '私人漫游';
-    if (dynamic.sides.length === 2) toast(`已开启双平台混合推荐 · ${typeName}（网易云 + QQ）`, 'ok', 3200);
+    const typeName = dynamic.label;
+    if (dynamic.sides.length === 2) toast(`${typeName}已开启 · 双平台混合（网易云 + QQ）`, 'ok', 3200);
     else if (dynamic.sides.length === 1) toast(`${typeName}已开启（仅 ${dynamic.sides[0] === 'netease' ? '网易云' : 'QQ'}：另一平台未登录或暂不可用）`, '', 3600);
     else toast(`${typeName}已开启`, 'ok');
     updateDynamicBar();
@@ -1408,6 +1407,10 @@ function bindUI() {
   // 心动/私人漫游入口统一在左侧导航
   $('#sideHeartMode').addEventListener('click', () => startDynamic('heartmix'));
   $('#sidePersonalFm').addEventListener('click', () => startDynamic('fmix'));
+
+  // 状态灯点击 = 退出当前心动 / 漫游
+  const dynChip = $('#dynamicState');
+  if (dynChip) dynChip.addEventListener('click', () => exitDynamic());
   updateDynamicBar();   // 初始未拿到登录态时先置灰
   loadLikedKeys();      // 本地红心初始化
   refreshQqLoginState().then(() => updateDynamicBar());

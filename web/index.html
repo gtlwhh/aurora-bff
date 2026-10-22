@@ -90,6 +90,9 @@
       <input id="searchInput" type="text" placeholder="搜索歌曲、歌手（网易云 + QQ 音乐聚合）" autocomplete="off" spellcheck="false">
     </div>
 
+    <!-- 动态队列状态灯：只在心动/漫游进行中显示，退出即隐藏，不占布局 -->
+    <div class="dyn-chip" id="dynamicState"></div>
+
     <div class="top-actions">
       <button class="icon-btn" id="btnGlow" title="律动光效开关">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
@@ -432,9 +435,6 @@
 
 <!-- 搜索联想 / 提示 -->
 <div class="toast-wrap" id="toastWrap"></div>
-
-<!-- 动态队列状态（心动模式 / 私人漫游）：浮在播放条上方，绝不占用侧边栏排版 -->
-<div class="dyn-chip" id="dynamicState"></div>
 
 <script type="module" src="/js/app.js"></script>
 </body>
