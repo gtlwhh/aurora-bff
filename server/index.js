@@ -22,7 +22,7 @@ const neteaseApi = require('./lib/netease-api');
 const analysisCache = require('./lib/analysis-cache');
 const { scanDirs, makeId } = require('./lib/scan');
 const { isAudio, readCover, readSidecarLyric } = require('./lib/audio-meta');
-const { AccountManager } = require('./lib/accounts');
+const { AccountManager, STATELESS } = require('./lib/accounts');
 const { PlaylistSession } = require('./lib/playlists');
 const qqApi = require('./lib/qq-api');
 const { GdStudioClient } = require('./providers/gdstudio');
@@ -54,9 +54,14 @@ const providers = {
   netease: neteaseProvider      // 启动后由 refreshProviders() 替换为组合 adapter
 };
 
-/** 平台账号 cookie 优先（加密存储），历史明文配置兜底 */
+/** 平台账号 cookie 优先（加密存储），历史明文配置兜底
+ *  无状态模式下完全不注入：凭证只能来自本次请求的 header */
 function settingsWithAccount() {
   const s = { ...store.read() };
+  if (accounts.describe('netease').stateless) {
+    delete s.neteaseCookie;          // 服务器绝不使用任何本地保存的 cookie
+    return s;
+  }
   const acct = accounts.getActive('netease');
   if (acct && acct.cookie) s.neteaseCookie = acct.cookie;
   return s;
@@ -103,8 +108,9 @@ function bootstrapQqApi() {
   qqBootstrap = qqApi.ensureStarted(3200).then((res) => {
     if (res.ok) {
       qqProviderInstance = new QqProvider(res.baseUrl, {
-        getToken: () => qqApi.loadSessionToken(),
-        setToken: (t) => qqApi.saveSessionToken(t)
+        // 服务器无状态：token 只从请求头来，不读盘也不写盘
+        getToken: () => (STATELESS ? '' : qqApi.loadSessionToken()),
+        setToken: (t) => { if (!STATELESS) qqApi.saveSessionToken(t); }
       });
       refreshProviders();
     } else {
@@ -194,7 +200,10 @@ accounts.registerBackend('qq', {
         console.log(`[accounts] QQ 扫码登录成功: ${st.nickname || st.userId}`);
       }
     } catch (_) {}
-    return { code: 803, handled: true, user, session: qqProviderInstance ? qqProviderInstance.token : '' };
+    const session = qqProviderInstance ? qqProviderInstance.token : '';
+    // 无状态服务器：token 交给客户端后立刻从进程内存里抹掉
+    if (STATELESS && qqProviderInstance) qqProviderInstance.setRuntimeToken('');
+    return { code: 803, handled: true, user, session };
   }
 });
 
@@ -678,8 +687,11 @@ async function handleApi(req, res, url) {
     try { patch = JSON.parse(body || '{}'); } catch (_) { return sendError(res, '参数错误', 400); }
     // 前端传 "已设置" 表示不修改 cookie
     if (patch.neteaseCookie === '已设置') delete patch.neteaseCookie;
-    // 手动粘贴的 cookie 也走加密存储，绝不明文写 settings.json
-    if (typeof patch.neteaseCookie === 'string' && patch.neteaseCookie.trim()) {
+    // 无状态服务器：任何形式的 cookie 都不接收、不落盘
+    if (accounts.describe('netease').stateless) {
+      delete patch.neteaseCookie;
+    } else if (typeof patch.neteaseCookie === 'string' && patch.neteaseCookie.trim()) {
+      // 桌面端：手动粘贴的 cookie 也走加密存储，绝不明文写 settings.json
       accounts.save('netease', patch.neteaseCookie.trim(), null);
       delete patch.neteaseCookie;
     }

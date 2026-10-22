@@ -31,6 +31,20 @@ function encryptionAvailable() {
   try { return !!(safeStorage && safeStorage.isEncryptionAvailable()); } catch (_) { return false; }
 }
 
+/**
+ * 无状态模式（服务器部署的默认行为）
+ *
+ * 纯 Node 进程（阿里云 ECS / pm2 / docker）一律无状态：
+ *   - 不读也不写 accounts.json
+ *   - 不把凭证放进任何内存变量
+ *   - 凭证只随每一次请求的 HTTP Header 进来，用完即弃
+ * 只有 Electron 桌面端（用户自己那台电脑）才允许用 DPAPI 加密存本地。
+ * 需要强行无状态可设 AURORA_STATELESS=1；桌面调试想落盘可设 AURORA_STATELESS=0。
+ */
+const STATELESS = process.env.AURORA_STATELESS === '1'
+  ? true
+  : (process.env.AURORA_STATELESS === '0' ? false : !process.versions.electron);
+
 /* ---- 落盘 ---- */
 function readStore() {
   try {
@@ -56,15 +70,20 @@ class AccountManager {
     this._backends = new Map();
     // platform -> 扫码会话状态 { key, code, message, user, saved, ok, timer, startedAt }
     this._sessions = new Map();
-    // 持久化是否被禁用（无 safeStorage）
-    this._persistDisabled = !encryptionAvailable();
-    if (this._persistDisabled) {
-      console.warn('[accounts] safeStorage 不可用（非 Electron 环境），登录态仅保存在内存');
+    // 持久化是否被禁用（无 safeStorage / 服务器无状态模式）
+    this._stateless = STATELESS;
+    this._persistDisabled = STATELESS || !encryptionAvailable();
+    if (STATELESS) {
+      console.log('[accounts] 无状态模式：不读写 accounts.json，凭证只随请求头透传，用完即弃');
+    } else if (this._persistDisabled) {
+      console.warn('[accounts] safeStorage 不可用，登录态仅保存在内存');
     }
   }
 
   /** 启动恢复 + 明文迁移。settingsRef = { get(), write(patch) } */
   init(settingsRef) {
+    // 服务器部署绝不读盘：连历史文件都不碰
+    if (this._stateless) return;
     const persisted = readStore();
     for (const [platform, rec] of Object.entries(persisted)) {
       try {
@@ -99,10 +118,13 @@ class AccountManager {
   /* ---------------- 活跃会话 ---------------- */
 
   getActive(platform) {
+    if (this._stateless) return null;      // 服务器上不存在"已登录账号"这种东西
     return this._active.get(platform) || null;
   }
 
   save(platform, secret, user) {
+    // 服务器无状态：不落盘、不进内存，调用方应改用请求头透传
+    if (this._stateless) return { persisted: false, stored: false, stateless: true };
     const rec = { user: user || (this._active.get(platform) || {}).user || null, savedAt: Date.now() };
     if (this._persistDisabled) {
       this._active.set(platform, { cookie: secret, user: rec.user, savedAt: rec.savedAt, volatile: true });
@@ -118,8 +140,10 @@ class AccountManager {
 
   clear(platform) {
     this._active.delete(platform);
-    const all = readStore();
-    if (all[platform]) { delete all[platform]; writeStore(all); }
+    if (!this._stateless) {
+      const all = readStore();
+      if (all[platform]) { delete all[platform]; writeStore(all); }
+    }
     const session = this._sessions.get(platform);
     if (session && session.timer) clearInterval(session.timer);
     this._sessions.delete(platform);
@@ -227,15 +251,16 @@ class AccountManager {
 
   /** 供 /api/settings 等展示（不含敏感信息） */
   describe(platform) {
-    const active = this._active.get(platform);
+    const active = this._stateless ? null : this._active.get(platform);
     return {
       supported: this.hasBackend(platform),
       loggedIn: !!active,
       user: active ? active.user : null,
       persisted: active ? !active.volatile : false,
-      encryption: encryptionAvailable()
+      encryption: encryptionAvailable(),
+      stateless: this._stateless          // true = 服务器不持有任何凭证，登录态由客户端负责
     };
   }
 }
 
-module.exports = { AccountManager, encryptionAvailable };
+module.exports = { AccountManager, encryptionAvailable, STATELESS };
