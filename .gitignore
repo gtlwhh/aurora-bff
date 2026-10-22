@@ -1,2 +1,8 @@
 node_modules/
+data/
+dist/
+build/
 *.log
+.DS_Store
+.env
+config/

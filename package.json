@@ -1,20 +1,34 @@
 {
   "name": "aurora-bff",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "极光音乐 BFF（Backend for Frontend）· 部署到 Vercel，App 端 CapacitorHttp 直连",
-  "scripts": {
-    "dev": "node dev-server.js",
-    "deploy": "netlify deploy --prod",
-    "start": "node dev-server.js"
-  },
-  "devDependencies": {
-    "vercel": "^65.0.0"
-  },
-  "dependencies": {
-    "NeteaseCloudMusicApi": "^4.32.0"
-  },
+  "description": "极光音乐服务端 · 网易云 + QQ 音乐双平台（搜索/播放/歌词/账号/歌单），纯公网 IP 直连",
+  "main": "server/index.js",
+  "type": "commonjs",
   "engines": {
     "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "serve": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "keywords": [
+    "aurora",
+    "music",
+    "bff",
+    "netease",
+    "qqmusic"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@yakult-green-tea/qq-music-api": "^3.3.4",
+    "NeteaseCloudMusicApi": "^4.32.0",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "electron": "^44.9.2",
+    "electron-builder": "^26.15.3",
+    "puppeteer-core": "^25.15.0"
   }
 }
