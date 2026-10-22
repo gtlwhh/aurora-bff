@@ -1,8 +1,8 @@
 {
   "name": "aurora-bff",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
-  "description": "极光音乐服务端 · 网易云 + QQ 音乐双平台（搜索/播放/歌词/账号/歌单），纯公网 IP 直连",
+  "description": "极光音乐服务端 · 网易云 + QQ 音乐双平台（搜索/播放/歌词/账号/歌单/混合推荐），凭证由客户端透传，服务端不落盘",
   "main": "server/index.js",
   "type": "commonjs",
   "engines": {
