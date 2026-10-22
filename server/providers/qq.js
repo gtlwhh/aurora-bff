@@ -1,4 +1,5 @@
 'use strict';
+const { STATELESS } = require('../lib/accounts');
 /**
  * QQ 音乐平台适配器（SourceAdapter 平台补充实现）
  *
@@ -64,6 +65,8 @@ class QqProvider {
     // 唯一来源：当前请求上下文（手机，互相隔离）或加密会话仓库（桌面单用户）。
     // 实例上零凭证状态 —— 并发几百个请求也不可能互通。
     const { ctxCredential } = require('../lib/req-context');
+    // 无状态（ECS/纯 Node）：只认请求头透传，绝不读旧会话文件缓存。
+    if (STATELESS) return ctxCredential('qq');
     return ctxCredential('qq') || this._getToken() || '';
   }
 

@@ -677,7 +677,10 @@ async function handleApi(req, res, url) {
   /* ---- 设置 ---- */
   if (p === '/api/settings' && req.method === 'GET') {
     const s = store.read();
-    const hasCookie = !!(s.neteaseCookie || accounts.getActive('netease'));
+    // 无状态服务器：本地 settings.json 里残留的 cookie 不算"已设置"（未登录就是未登录）
+    const hasCookie = accounts.describe('netease').stateless
+      ? false
+      : !!(s.neteaseCookie || accounts.getActive('netease'));
     return sendJSON(res, {
       ...s,
       neteaseCookie: hasCookie ? '已设置' : '',

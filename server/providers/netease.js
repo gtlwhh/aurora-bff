@@ -1,4 +1,5 @@
 'use strict';
+const { STATELESS } = require('../lib/accounts');
 /**
  * 网易云音乐音源适配器
  *
@@ -93,6 +94,10 @@ class NeteaseProvider {
     // ② 桌面端单用户回退：运行时注入 / 本地加密存储（行为不变）
     const { ctxCredential } = require('../lib/req-context');
     // 唯一来源：当前请求上下文（手机）或本地加密存储（桌面单用户）。实例上零凭证状态
+    // 无状态（ECS/纯 Node）：只认请求头透传，绝不回退 settings.json 的历史残留。
+    // （这正是"设置显示未登录却拉到个人歌单"的漏洞根源）
+    // 桌面端（Electron 单用户）：保留本地加密存储回退。
+    if (STATELESS) return ctxCredential('ncm');
     return ctxCredential('ncm') || this.settings.neteaseCookie || '';
   }
 
