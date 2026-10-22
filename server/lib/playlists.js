@@ -167,6 +167,8 @@ class PlaylistSession {
       exhausted: false,
       refilling: false
     };
+    // 目标 BPM：补货时优先挑节奏接近的歌，方便触发交叉淡化
+    if (ctx.bpm) session.cursor.bpm = Math.round(Number(ctx.bpm)) || 0;
     this._sessions.set(id, session);
     this._refillInBackground(session);
     this._persist();

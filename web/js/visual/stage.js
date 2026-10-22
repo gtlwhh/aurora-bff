@@ -162,6 +162,7 @@ export class CoverStage {
     this.glowEnabled = true;
     this.particlesEnabled = true;
     this.puzzleEnabled = true;
+    this._fading = false;          // 淡入淡出过渡中：暂停每帧呼吸缩放，避免覆盖补间
     this.autoRotate = false;
 
     this.rotation = { x: -0.06, y: -0.42 };
@@ -648,11 +649,93 @@ export class CoverStage {
     if (mode === 'animate') {
       // 等动画真正结束才返回，状态机据此判断视觉是否完成
       await this._startPuzzle(tex);
+    } else if (mode === 'fade') {
+      // 关闭拼图时的降级动画：旧封面淡出 → 新封面淡入（带轻微缩放）
+      await this._fadeSwap(tex, opt.isCurrent);
     } else {
       this.finishPuzzle();
       this._applyInstant(tex);
     }
     this.currentTex = tex;
+  }
+
+  /** 封面所有面片材质（拼块 + 底板） */
+  _coverMats() {
+    const mats = [];
+    const push = (m) => { if (m && mats.indexOf(m) === -1) mats.push(m); };
+    this.tileMap.concat(this.backTileMap).forEach(t => push(t.mat));
+    push(this.backMat);
+    return mats;
+  }
+
+  /** 简易补间（rAF + smoothstep），返回 Promise 便于串行拼接 */
+  _tween(dur, fn) {
+    return new Promise((resolve) => {
+      const start = performance.now();
+      const tick = (now) => {
+        const p = clamp01((now - start) / dur);
+        fn(p * p * (3 - 2 * p), p);          // smoothstep 缓动
+        if (p < 1) requestAnimationFrame(tick);
+        else resolve();
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
+  /**
+   * 平滑切入切出（拼图关闭时使用）
+   * 旧封面向外淡出并轻微放大 → 换图 → 新封面略小、从内侧淡入到正常大小
+   *
+   * 注意：主循环 _tick 每帧都会写 coverGroup.scale（低频呼吸）。
+   * 所以整个过渡期间必须用 _fading 把呼吸缩放挡住，否则缩放补间会被立刻覆盖，
+   * 用户只会看到透明度变化 —— 这正是之前"关了拼图就显得生硬"的原因。
+   */
+  async _fadeSwap(tex, isCurrent) {
+    if (this._puzzleResolve) {           // 上一段拼图动画先收尾，避免 Promise 悬挂
+      const r = this._puzzleResolve;
+      this._puzzleResolve = null;
+      r();
+    }
+    this._popping = false;
+    this._fading = true;
+    this.transition = null;
+
+    const mats = this._coverMats();
+    mats.forEach((m) => { m.transparent = true; m.needsUpdate = true; });
+    const setOpacity = (v) => { for (const m of mats) m.opacity = v; };
+    const reset = () => {
+      setOpacity(1);
+      mats.forEach((m) => { m.transparent = false; m.needsUpdate = true; });
+      this.coverGroup.scale.setScalar(1);
+      this.coverGroup.position.z = 0;
+      this._fading = false;
+    };
+
+    this.coverGroup.visible = true;
+
+    // 1) 旧封面向外淡出：放大 6% + 微微后退，180ms
+    await this._tween(180, (e) => {
+      setOpacity(1 - e);
+      this.coverGroup.scale.setScalar(1 + 0.06 * e);
+      this.coverGroup.position.z = -0.1 * e;
+    });
+
+    this._applyInstant(tex);
+
+    // 已经被下一首顶替：直接落位，不再播入场
+    if (isCurrent && !isCurrent()) { reset(); return false; }
+
+    // 2) 新封面从内侧淡入：92% → 100%，带一点回弹感，340ms
+    await this._tween(340, (e, raw) => {
+      // raw 是线性进度，用来叠一个轻微的 easeOutBack（结尾不过冲太多，避免晃动）
+      const back = raw < 1 ? 1 - Math.pow(1 - raw, 3) + Math.sin(raw * Math.PI) * 0.035 : 1;
+      setOpacity(Math.min(1, raw * 1.25));
+      this.coverGroup.scale.setScalar(0.92 + 0.08 * back);
+      this.coverGroup.position.z = -0.1 * (1 - back);
+    });
+
+    reset();
+    return true;
   }
 
   /** 立即切换（不带动画） */
@@ -887,7 +970,7 @@ export class CoverStage {
     this.coverGroup.rotation.x = this.rotation.x + breath * 0.4;
     this.coverGroup.rotation.y = this.rotation.y;
     this.coverGroup.rotation.z = Math.sin(this.time * 0.5) * 0.006;
-    if (!this._popping) {
+    if (!this._popping && !this._fading) {
       const s = 1 + this.smooth.bass * 0.016;
       this.coverGroup.scale.setScalar(s);
     }

@@ -240,6 +240,52 @@ const localPl = new LocalPlaylists();
  *   fmix     私人漫游混合：netease /personal_fm + qq /user/guess-you-like
  *   heartmix 心动模式混合：netease 心动模式（种子） + qq 相似歌（种子）
  */
+/* ------------------------------------------------------------------ */
+/* BPM 工具：读 analysis.json 缓存，供心动 / 漫游做节奏筛选            */
+/* ------------------------------------------------------------------ */
+
+const bpmMemo = new Map();          // trackId -> bpm（0 = 未分析过）
+
+function bpmOfTrackId(trackId) {
+  const key = String(trackId || '');
+  if (!key) return 0;
+  if (bpmMemo.has(key)) return bpmMemo.get(key);
+  let bpm = 0;
+  try {
+    const a = analysisCache.read(key);
+    const v = Number(a && a.bpm);
+    if (isFinite(v) && v > 0) bpm = Math.round(v);
+  } catch (_) {}
+  bpmMemo.set(key, bpm);
+  return bpm;
+}
+
+function bpmOfTrack(t) {
+  return t && t.id ? bpmOfTrackId(t.id) : 0;
+}
+
+/**
+ * 按目标 BPM 重排候选：
+ *   ① |Δ| ≤ tolerance（默认 ±8）  ② 未分析过 BPM 的  ③ 差距过大的
+ * 各桶内部保持原来的「双平台交替穿插」顺序。
+ * 一个接近的都没有时原样返回，等价于普通推荐（队列不会断）。
+ */
+function orderTracksByBpm(tracks, target, tolerance = 8) {
+  if (!target || !Array.isArray(tracks) || tracks.length < 2) return { tracks, matched: 0 };
+  const close = [], unknown = [], far = [];
+  for (const t of tracks) {
+    const b = bpmOfTrack(t);
+    if (!b) { unknown.push(t); continue; }
+    if (Math.abs(b - target) <= tolerance) close.push(t);
+    else far.push(t);
+  }
+  if (!close.length) return { tracks, matched: 0 };
+  return { tracks: close.concat(unknown, far), matched: close.length };
+}
+
+/**
+ * 混合推荐适配器（platform=mix）
+ */
 function buildMixAdapter() {
   return {
     id: 'mix',
@@ -276,17 +322,47 @@ function buildMixAdapter() {
           console.warn('[mix] 一侧推荐失败（另一侧继续）:', x.reason && x.reason.message);
         }
       });
-      // 共享源头合并（core/mix.mjs）：交替穿插，移动端 BFF 复用同一实现
+      // 共享源头合并（core/mix.mjs）：交替穿插 + BPM 节奏定向，移动端 BFF 复用同一实现
+      // 目标 BPM：优先用会话里的 bpm，其次用 seed.trackId 去 analysis.json 缓存里查
+      const targetBpm = Math.round(Number(cursor.bpm) || bpmOfTrackId(cursor.trackId) || 0);
       let merge;
       try {
         merge = await import('../core/mix.mjs');
       } catch (_) {
-        merge = { mergeMixRecommendations: ({ ne, qq }) => ({ tracks: [...ne, ...qq], sides: [] }) };
+        merge = null;
       }
-      const { tracks, sides } = merge.mergeMixRecommendations({ ne: neTracks, qq: qqTracks });
+      let tracks, sides, matched = 0;
+      if (merge && typeof merge.mergeMixRecommendations === 'function') {
+        const r = merge.mergeMixRecommendations({
+          ne: neTracks, qq: qqTracks, bpmOf: bpmOfTrack, targetBpm, tolerance: 8
+        });
+        tracks = r.tracks; sides = r.sides; matched = r.matched || 0;
+      } else {
+        // 极端兜底：拿不到共享模块时保持原来的交替合并
+        tracks = [];
+        for (let i = 0; i < Math.max(neTracks.length, qqTracks.length); i++) {
+          if (neTracks[i]) tracks.push(neTracks[i]);
+          if (qqTracks[i]) tracks.push(qqTracks[i]);
+        }
+        sides = [neTracks.length && 'netease', qqTracks.length && 'qq'].filter(Boolean);
+      }
       if (sides.length === 2) console.log(`[mix] 双平台混合：网易 ${neTracks.length} + QQ ${qqTracks.length} 首（交替穿插）`);
       else if (sides.length === 1) console.log(`[mix] 单平台降级：仅 ${sides[0]} 出歌`);
-      return { tracks, cursor: newCursor, sides };
+
+      // 老版共享模块不支持 BPM（matched === 0 且确实有目标）时，退回到后置重排
+      if (targetBpm && !matched) {
+        const res = orderTracksByBpm(tracks, targetBpm);
+        if (res.matched) {
+          tracks = res.tracks;
+          matched = res.matched;
+        }
+      }
+      if (targetBpm) {
+        console.log(matched
+          ? `[mix] BPM 定向：目标 ${targetBpm} ±8，命中 ${matched}/${tracks.length}`
+          : `[mix] BPM 定向：目标 ${targetBpm}，候选里没有接近节奏，降级为普通推荐`);
+      }
+      return { tracks, cursor: { ...newCursor, bpm: targetBpm }, sides };
     }
   };
 }
@@ -879,10 +955,19 @@ async function handleApi(req, res, url) {
     try {
       // seed：心动模式需要 { id: 种子歌曲nid, pid: 歌单id }；本地电台忽略
       const seed = data.seed || (data.seedTrackId ? { id: data.seedTrackId } : null);
+
+      /* 目标 BPM：优先客户端显式传入，否则读 analysis.json 缓存里种子歌曲的 BPM */
+      let bpm = Math.round(Number(data.bpm) || 0);
+      if (!bpm && seed) {
+        const key = String(seed.trackId || seed.id || seed.seedMid || '');
+        if (key) bpm = bpmOfTrackId(key);
+      }
+
       const r = playlistSession.createDynamic(platform, type, seed, {
-        localTracks: localProvider.tracks
+        localTracks: localProvider.tracks,
+        bpm
       });
-      return sendJSON(res, { ok: true, ...r });
+      return sendJSON(res, { ok: true, bpm, ...r });
     } catch (err) {
       return sendError(res, err.message, 400);
     }

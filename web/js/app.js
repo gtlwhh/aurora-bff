@@ -522,6 +522,8 @@ async function startDynamic(type) {
       return;
     }
     seed = {};
+    // 带上曲目 id：服务端据此从 analysis.json 读 BPM，用于节奏相近的推荐
+    seed.trackId = cur.id;
     if (cur.provider === 'netease' && cur.nid) {
       let pid = cur.nid;
       try {
@@ -534,6 +536,9 @@ async function startDynamic(type) {
     } else if (cur.gid) {
       seed.seedMid = cur.gid;
     }
+  } else if (cur && cur.provider !== 'local' && cur.id) {
+    // 私人漫游：不传平台种子，但把曲目 id 带上，服务端只用来读 BPM
+    seed = { trackId: cur.id };
   }
 
   try {
@@ -620,7 +625,8 @@ function initTransition() {
     // 视觉跟进，时长由 stage 的碎片动画决定
     onVisual: async (track, gen) => {
       const cover = api.coverUrl(track);
-      const mode = stage.puzzleEnabled ? 'animate' : 'instant';
+      // 拼图关闭时降级为「平滑切入切出」（旧封面淡出放大 → 新封面淡入），不再是硬切
+      const mode = stage.puzzleEnabled ? 'animate' : 'fade';
       try {
         await stage.setCover(cover, {
           mode,
