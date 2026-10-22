@@ -477,10 +477,10 @@ function updateDynamicBar() {
       const mixTxt = sides.length === 2 ? ' · 双平台混合'
         : sides.length === 1 ? ` · ${sides[0] === 'netease' ? '网易云' : 'QQ'}` : '';
       st.textContent = name + mixTxt;
-      st.className = 'dynamic-state on';
+      st.className = 'dyn-chip on';
     } else {
       st.textContent = '';
-      st.className = 'dynamic-state';
+      st.className = 'dyn-chip';
     }
   });
 }

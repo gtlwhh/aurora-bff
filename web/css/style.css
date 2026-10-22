@@ -1629,8 +1629,34 @@ body.has-user-bg #userBg::after {
 .side-item.active { background: rgba(255,255,255,0.1); opacity: 1; }
 .side-item:disabled { opacity: 0.3; cursor: not-allowed; }
 .side-sep { height: 1px; background: rgba(255,255,255,0.08); margin: 8px 6px; }
-.side-dyn-state { font-size: 11px; opacity: 0.55; padding: 6px 12px; min-height: 18px; }
-.side-dyn-state.on { color: var(--accent); opacity: 1; }
+/* 动态队列状态徽标：固定在播放条上方，absolute/fixed 定位，不参与任何 flex 布局 */
+.dyn-chip {
+  position: fixed;
+  left: 20px;
+  bottom: calc(var(--playerbar-h, 88px) + 12px);
+  z-index: 60;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--accent, #7c6cff);
+  background: rgba(124, 108, 255, 0.14);
+  border: 1px solid rgba(124, 108, 255, 0.32);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dyn-chip.on { display: inline-flex; }
+/* 极简模式整屏只有封面与悬浮播放条，徽标会碍事，直接不显示 */
+body.minimal .dyn-chip { display: none !important; }
 #maincol { flex: 1; min-width: 0; }
 
 /* 抽屉改为常驻右栏 */
