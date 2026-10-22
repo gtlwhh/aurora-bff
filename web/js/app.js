@@ -162,6 +162,23 @@ async function init() {
     }
   });
 
+  // 歌词手动滚动接管：滚轮自己换算成位移（.lyric-scroll 是 overflow:hidden，
+  // 原生滚不动）；触摸/按住只暂停自动跟随。4 秒无操作后平滑回弹。
+  {
+    const sc = $('#lyricScroll');
+    if (sc) {
+      sc.addEventListener('wheel', lyricOnWheel, { passive: true });
+      sc.addEventListener('touchmove', lyricUserTakeover, { passive: true });
+      sc.addEventListener('pointerdown', lyricUserTakeover, { passive: true });
+    }
+    // 排查口：F12 打开控制台后执行 __lyricState() 查看接管状态
+    window.__lyricState = () => ({
+      hold: lyricHold, baseY: lyricBaseY, manualY: lyricManualY,
+      idx: state.lyricIndex, lines: state.lyrics.lines.length,
+      rows: lyricFx ? lyricFx.nodes.length : 0
+    });
+  }
+
   login = createLoginController({
     toast,
     onLoggedIn: (pf) => {
@@ -668,6 +685,19 @@ function seekTo(t) {
   const wasTransitioning = transition && transition.notifySeek();
   if (wasTransitioning && stage) stage.finishPuzzle();
   audio.seek(t);
+
+  // seek 后立刻按新时间重算歌词高亮：逐字律动的旧状态不能卡死
+  if (lyricFx && state.lyrics.lines.length && !state.lyrics.plain) {
+    const idx = findLineIndex(state.lyrics.lines, Math.max(0, t + effOffsetMs / 1000));
+    state.lyricIndex = idx;
+    lyricFx.setIndex(idx);
+    // seek = 用户明确要求跳转：取消预览保持，歌词立即回到新位置
+    lyricHold = false;
+    clearTimeout(lyricHoldTimer);
+    lyricManualY = 0;
+    lyricBaseY = lyricAutoTarget(Math.max(0, idx));
+    if (idx >= 0) lyricApplyTy(lyricBaseY);
+  }
 }
 
 /** 情绪曲线：分析管理器 + 进度条上的曲线 UI */
@@ -810,7 +840,7 @@ function nextTrack(auto = false) {
 
 function prevTrack() {
   if (!state.queue.length) return;
-  if (audio.currentTime > 4) { seekTo(0); return; }
+  // 纯粹切歌：不再"超过 4 秒就重播当前曲"（那个逻辑导致要点两次才能回上一首）
   let idx = state.queueIndex - 1;
   if (idx < 0) idx = state.repeat === 'all' ? state.queue.length - 1 : 0;
   state.queueIndex = idx;
@@ -821,8 +851,13 @@ function prevTrack() {
 /* ==================================================================
    歌词
    ================================================================== */
+let lyricReqId = 0;              // 歌词请求令牌：防旧请求回来说新请求
+
 async function loadLyric(track) {
+  const reqId = ++lyricReqId;
+  // ① 切歌瞬间立刻清掉上一首的词，并给出占位提示（不等网络）
   clearLyric();
+  showLyricEmpty('歌词加载中…', `${track.title || ''} · ${track.artist || ''}`.trim());
   state.autoCalib = null;          // 换歌了，旧校准作废
   refreshLyricOffset();
   $('#lyricSource').textContent = '加载中…';
@@ -831,13 +866,14 @@ async function loadLyric(track) {
   try {
     data = await api.getLyric(track);
   } catch (err) {
+    if (reqId !== lyricReqId || state.current !== track) return;   // 已切歌，丢弃
     $('#lyricSource').textContent = '获取失败';
     showLyricEmpty('歌词获取失败', err.message);
     return;
   }
 
-  // 竞态保护：加载过程中又切歌了
-  if (state.current !== track) return;
+  // ② 竞态保护：加载过程中又切歌了（令牌 + 当前曲目双重校验）
+  if (reqId !== lyricReqId || state.current !== track) return;
 
   const raw = (data && data.lrc) || '';
   const trans = (data && data.translated) || '';
@@ -859,7 +895,12 @@ async function loadLyric(track) {
   state.lyricIndex = -2;
 
   $('#lyricSource').textContent = state.lyrics.source;
+  // ③ 时间校准：不默认从第 0 行开始，按当前播放进度直接定位并滚动到位
+  const offsetSec = effOffsetMs / 1000;
+  const curIdx = findLineIndex(state.lyrics.lines, Math.max(0, audio.currentTime + offsetSec));
+  state.lyricIndex = curIdx;
   renderLyricLines();
+  if (curIdx >= 0 && lyricFx) lyricFx.scrollTo(curIdx);
   tryCalibrate();   // 曲线可能已在内存里，歌词一到就校准
 }
 
@@ -903,7 +944,82 @@ function renderLyricLines() {
   if (state.lyricIndex >= 0) {
     lyricFx.setIndex(state.lyricIndex);
     lyricFx.scrollTo(state.lyricIndex);
+    if (!lyricHold) {
+      lyricBaseY = lyricAutoTarget(state.lyricIndex);
+      lyricManualY = 0;
+    }
   }
+}
+
+/* ---------------- 歌词滚动控制（桌面端 .lyric-scroll 是 overflow:hidden，
+   滚动完全由 #lyricInner 的 transform 驱动，滚轮增量必须自己换算成位移） ---------------- */
+let lyricHold = false;          // 用户手动滚动接管中
+let lyricHoldTimer = null;
+let lyricTweenId = 0;           // 回弹动画令牌
+let lyricBaseY = 0;             // 当前自动定位的 translateY（负值）
+let lyricManualY = 0;           // 用户手动滚出的偏移（相对自动定位）
+
+function lyricApplyTy(ty) {
+  const el = $('#lyricInner');
+  if (el) el.style.transform = `translateY(${ty}px)`;
+}
+
+/** 某行高亮时 #lyricInner 应该处于的 translateY */
+function lyricAutoTarget(idx) {
+  const sc = $('#lyricScroll');
+  const node = lyricFx && lyricFx.nodes ? lyricFx.nodes[idx] : null;
+  if (!node || !sc) return 0;
+  return -Math.max(0, node.offsetTop + node.offsetHeight / 2 - sc.clientHeight * 0.42);
+}
+
+function lyricMaxUp() {
+  const inner = $('#lyricInner'), sc = $('#lyricScroll');
+  if (!inner || !sc) return 0;
+  return Math.max(0, inner.scrollHeight - sc.clientHeight + 60);
+}
+
+function lyricUserTakeover() {
+  if (!lyricHold) console.log('[lyric] 手动接管：暂停自动跟随');
+  lyricHold = true;
+  lyricTweenId++;                            // 取消进行中的回弹
+  clearTimeout(lyricHoldTimer);
+  lyricHoldTimer = setTimeout(() => {
+    lyricHold = false;
+    console.log('[lyric] 4 秒无操作，回弹到当前句');
+    bounceLyricBack();
+  }, 4000);
+}
+
+/** 滚轮 → 位移（桌面端没有原生滚动，只能自己换算） */
+function lyricOnWheel(e) {
+  lyricUserTakeover();
+  let ty = lyricBaseY + lyricManualY - (e.deltaY || 0) * 0.55;
+  ty = Math.max(-lyricMaxUp(), Math.min(0, ty));
+  lyricManualY = ty - lyricBaseY;
+  lyricApplyTy(ty);
+}
+
+/** 回弹：从当前视觉位置平滑滑回当前高亮行的自动定位 */
+function bounceLyricBack() {
+  const idx = state.lyricIndex;
+  if (idx == null || idx < 0 || !lyricFx) { lyricManualY = 0; return; }
+  const newBase = lyricAutoTarget(idx);
+  const fromTy = lyricBaseY + lyricManualY;
+  if (Math.abs(fromTy - newBase) < 1) {
+    lyricBaseY = newBase; lyricManualY = 0; lyricApplyTy(newBase);
+    return;
+  }
+  const id = ++lyricTweenId;
+  const start = performance.now(), dur = 640;
+  const step = (now) => {
+    if (id !== lyricTweenId || lyricHold) return;   // 用户又动了，交还控制权
+    const p = Math.min(1, (now - start) / dur);
+    const e = 1 - Math.pow(1 - p, 3);
+    lyricApplyTy(fromTy + (newBase - fromTy) * e);
+    if (p < 1) requestAnimationFrame(step);
+    else { lyricBaseY = newBase; lyricManualY = 0; }
+  };
+  requestAnimationFrame(step);
 }
 
 function updateLyricHighlight() {
@@ -917,7 +1033,12 @@ function updateLyricHighlight() {
   if (!lyricFx) return;
 
   lyricFx.setIndex(idx);
-  if (idx >= 0) lyricFx.scrollTo(idx);
+  // 手动预览期间只更新高亮，不抢滚动；松手后由回弹逻辑归位
+  if (idx >= 0 && !lyricHold) {
+    lyricFx.scrollTo(idx);
+    lyricBaseY = lyricAutoTarget(idx);
+    lyricManualY = 0;
+  }
 }
 
 function scrollToLyric(idx) {

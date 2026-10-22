@@ -297,6 +297,13 @@ export class LyricFX {
       this._resetRow(prev);
     }
 
+    // seek 回跳时，新行之后的行可能残留"已唱"的字位移；不重置会高亮卡死
+    const lo = Math.max(0, Math.min(prev, idx));
+    const hi = Math.max(prev, idx);
+    for (let i = lo; i <= hi; i++) {
+      if (i !== idx && this.nodes[i]) this._resetRow(i);
+    }
+
     for (let i = 0; i < this.nodes.length; i++) {
       if (i < idx) this.nodes[i].classList.add('past');
       else if (i > idx) this.nodes[i].classList.remove('active', 'past');

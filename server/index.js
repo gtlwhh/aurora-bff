@@ -23,6 +23,7 @@ const analysisCache = require('./lib/analysis-cache');
 const { scanDirs, makeId } = require('./lib/scan');
 const { isAudio, readCover, readSidecarLyric } = require('./lib/audio-meta');
 const { AccountManager, STATELESS } = require('./lib/accounts');
+const reqCtx = require('./lib/req-context');
 const { PlaylistSession } = require('./lib/playlists');
 const qqApi = require('./lib/qq-api');
 const { GdStudioClient } = require('./providers/gdstudio');
@@ -331,6 +332,19 @@ function buildMixAdapter() {
           console.warn('[mix] 一侧推荐失败（另一侧继续）:', x.reason && x.reason.message);
         }
       });
+
+      // 心动模式在"未登录网易云 / 种子不可用"时经常空手而归：
+      // 自动降级一次私人电台，保证"点了心动就有歌"（其余用户反馈的点不动）
+      if (type === 'heartmix' && neTracks.length === 0 && ne && ne.recommend) {
+        try {
+          const r2 = await ne.recommend.next('personalfm', { ...(cursor.ne || {}) });
+          if (r2 && Array.isArray(r2.tracks) && r2.tracks.length) {
+            neTracks = r2.tracks;
+            newCursor.ne = r2.cursor || {};
+            console.log('[mix] 心动模式空结果 → 已降级为私人电台推荐');
+          }
+        } catch (_) {}
+      }
       // 共享源头合并（core/mix.mjs）：交替穿插 + BPM 节奏定向，移动端 BFF 复用同一实现
       // 目标 BPM：优先用会话里的 bpm，其次用 seed.trackId 去 analysis.json 缓存里查
       const targetBpm = Math.round(Number(cursor.bpm) || bpmOfTrackId(cursor.trackId) || 0);
@@ -652,15 +666,12 @@ async function handleApi(req, res, url) {
   const p = url.pathname;
   const q = url.searchParams;
 
-  /* ---- 客户端凭证透传（手机端把 cookie/token 放 header，服务端不落盘） ---- */
+  /* ---- 客户端凭证透传 ----
+     凭证已由 http 入口写进 AsyncLocalStorage（每请求隔离），
+     provider 在任意 await 深度读 ctxCredential() 取"自己这次请求"的值。
+     这里绝不能再写进单例实例字段 —— 那是并发串号事故的根源。 */
   const clientNcm = String(req.headers['x-ncm-cookie'] || '').trim();
   const clientQq = String(req.headers['x-qq-session'] || '').trim();
-  if (clientNcm && neteaseProvider && typeof neteaseProvider.setRuntimeCookie === 'function') {
-    neteaseProvider.setRuntimeCookie(clientNcm);
-  }
-  if (clientQq && qqProviderInstance && typeof qqProviderInstance.setRuntimeToken === 'function') {
-    qqProviderInstance.setRuntimeToken(clientQq);
-  }
 
   /* ---- 设置 ---- */
   if (p === '/api/settings' && req.method === 'GET') {
@@ -1298,7 +1309,13 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname.startsWith('/api/')) {
     try {
-      await handleApi(req, res, url);
+      // ★ 每请求凭证上下文：透传头只存进 AsyncLocalStorage，
+      //   绝不写进 provider 单例 —— 否则并发用户会互相串号（已发生过的安全事故）
+      const ctx = {
+        ncm: String(req.headers['x-ncm-cookie'] || '').trim(),
+        qq: String(req.headers['x-qq-session'] || '').trim()
+      };
+      await reqCtx.als.run(ctx, () => handleApi(req, res, url));
     } catch (err) {
       console.error('[api]', url.pathname, err.message);
       if (!res.headersSent) sendError(res, err.message || '服务器内部错误', 500);

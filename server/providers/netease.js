@@ -94,8 +94,10 @@ class NeteaseProvider {
   }
 
   get cookie() {
-    // 客户端透传优先；没有则回落到本地存储（桌面端行为不变）
-    return this._rtCookie || this.settings.neteaseCookie || '';
+    // ① 每请求上下文（AsyncLocalStorage）：并发用户的凭证互相隔离，杜绝串号
+    // ② 桌面端单用户回退：运行时注入 / 本地加密存储（行为不变）
+    const { ctxCredential } = require('../lib/req-context');
+    return ctxCredential('ncm') || this._rtCookie || this.settings.neteaseCookie || '';
   }
 
   get level() {

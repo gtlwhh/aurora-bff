@@ -62,6 +62,11 @@ class QqProvider {
   }
 
   get token() {
+    // ① 每请求上下文（AsyncLocalStorage）：并发用户的 token 互相隔离，杜绝串号
+    // ② 桌面端单用户回退：运行时注入 / 加密会话仓库（行为不变）
+    const { ctxCredential } = require('../lib/req-context');
+    const rt = ctxCredential('qq');
+    if (rt) return rt;
     if (this._tokenCache === undefined) this._tokenCache = this._getToken() || '';
     return this._tokenCache;
   }
