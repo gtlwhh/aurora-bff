@@ -201,9 +201,10 @@ accounts.registerBackend('qq', {
         console.log(`[accounts] QQ 扫码登录成功: ${st.nickname || st.userId}`);
       }
     } catch (_) {}
-    const session = qqProviderInstance ? qqProviderInstance.token : '';
-    // 无状态服务器：token 交给客户端后立刻从进程内存里抹掉
-    if (STATELESS && qqProviderInstance) qqProviderInstance.setRuntimeToken('');
+    // 令牌从本次请求的上下文里取（api() 扫码成功时写入），桌面端回退实例 getter
+    const store = reqCtx.als.getStore();
+    const session = (store && store.qqLoginToken) || (qqProviderInstance ? qqProviderInstance.token : '');
+    if (store) delete store.qqLoginToken;
     return { code: 803, handled: true, user, session };
   }
 });

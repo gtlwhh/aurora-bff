@@ -56,24 +56,15 @@ class QqProvider {
     this.id = 'qq';
     this.name = 'QQ音乐';
     this.baseUrl = (baseUrl || '').replace(/\/+$/, '');
-    this._tokenCache = undefined;               // 惰性加载
     this._getToken = tokenStore.getToken || (() => '');
     this._setToken = tokenStore.setToken || (() => {});
   }
 
   get token() {
-    // ① 每请求上下文（AsyncLocalStorage）：并发用户的 token 互相隔离，杜绝串号
-    // ② 桌面端单用户回退：运行时注入 / 加密会话仓库（行为不变）
+    // 唯一来源：当前请求上下文（手机，互相隔离）或加密会话仓库（桌面单用户）。
+    // 实例上零凭证状态 —— 并发几百个请求也不可能互通。
     const { ctxCredential } = require('../lib/req-context');
-    const rt = ctxCredential('qq');
-    if (rt) return rt;
-    if (this._tokenCache === undefined) this._tokenCache = this._getToken() || '';
-    return this._tokenCache;
-  }
-
-  /** 客户端凭证透传：手机端把会话 token 放 header 传上来，服务端不落盘 */
-  setRuntimeToken(token) {
-    this._tokenCache = String(token || '');
+    return ctxCredential('qq') || this._getToken() || '';
   }
 
   isAvailable() { return !!this.baseUrl; }
@@ -117,8 +108,13 @@ class QqProvider {
         if (m && m[1]) token = m[1];
       }
       if (token) {
-        this._tokenCache = token;
         this._setToken(token);
+        // 令牌属于本次登录请求：写进请求上下文带回给发起扫码的客户端（不驻留实例）
+        try {
+          const { als } = require('../lib/req-context');
+          const st = als.getStore();
+          if (st) st.qqLoginToken = token;
+        } catch (_) {}
       }
     }
 

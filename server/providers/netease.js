@@ -79,14 +79,9 @@ class NeteaseProvider {
     this.name = '网易云音乐';
     this.settings = settings || {};
     this.fallbackBaseUrl = fallbackBaseUrl || '';
-    this._rtCookie = '';          // 本次请求由客户端透传的 cookie（优先于本地存储）
   }
 
   /** 客户端凭证透传：每个请求进来时注入，服务端不落盘 */
-  setRuntimeCookie(cookie) {
-    this._rtCookie = String(cookie || '');
-  }
-
   get baseUrl() {
     // 用户自己填的优先，其次用播放器内置拉起的本地服务
     const raw = this.settings.neteaseBaseUrl || this.fallbackBaseUrl || '';
@@ -97,7 +92,8 @@ class NeteaseProvider {
     // ① 每请求上下文（AsyncLocalStorage）：并发用户的凭证互相隔离，杜绝串号
     // ② 桌面端单用户回退：运行时注入 / 本地加密存储（行为不变）
     const { ctxCredential } = require('../lib/req-context');
-    return ctxCredential('ncm') || this._rtCookie || this.settings.neteaseCookie || '';
+    // 唯一来源：当前请求上下文（手机）或本地加密存储（桌面单用户）。实例上零凭证状态
+    return ctxCredential('ncm') || this.settings.neteaseCookie || '';
   }
 
   get level() {
