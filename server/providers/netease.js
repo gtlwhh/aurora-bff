@@ -166,6 +166,7 @@ class NeteaseProvider {
       picUrl: album.picUrl || (album.picUrl_str || ''),
       duration: s.duration || s.dt || 0,
       fee: s.fee,
+      pop: s.pop || s.popularity || 0,     // 热度：供搜索排序区分原唱与冷门翻唱
       hasCover: !!(album.picUrl),
       hasLyric: true
     };

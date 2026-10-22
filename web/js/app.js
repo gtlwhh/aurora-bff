@@ -14,7 +14,7 @@ import { AnalysisManager } from './core/analysis.js';
 import { Moodbar } from '/core/moodbar.js';
 import { PixelBuddy } from '/core/pixel-buddy.js';
 import { calibrateLyricOffset } from '/core/lyric-calib.js'
-import { relevanceScore, mixedSortCompare } from '/core/sort.js';
+import { relevanceScore, mixedSortCompare, buildSortContext } from '/core/sort.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -1258,14 +1258,17 @@ function bindUI() {
         if (r.status === 'fulfilled') merged.push(...(r.value.tracks || []));
         else errs.push(PROVIDER_BADGE[pf] + '：' + (r.reason && r.reason.message || '失败'));
       });
-      // 同平台去重 + 相关度排序（标题+歌手）
+      // 同平台去重 + 四档强制排序（原唱 > 歌手 > 歌名 > 伴奏/翻唱垫底），共用 core/sort.js
       const seen = new Set();
-      merged = merged.filter(t => {
+      const dedup = merged.filter(t => {
         const k = t.provider + ':' + (t.gid || t.nid);
         if (seen.has(k)) return false;
         seen.add(k);
         return true;
-      }).sort((a, b) => mixedSortCompare(a, b, q));
+      });
+      // 先从结果集里推断原唱歌手（翻唱标题常带「原唱：xxx」），再排序
+      const sortCtx = buildSortContext(dedup, q);
+      merged = dedup.sort((a, b) => mixedSortCompare(a, b, q, sortCtx));
       state.results = { tracks: merged, query: q, provider, errors: errs };
       renderMain();
       return;
