@@ -443,7 +443,10 @@ function sendJSON(res, data, status = 200) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': body.length,
-    'Cache-Control': 'no-store'
+    // 个人数据绝不允许被浏览器/代理缓存（writeHead 优先级高于 setHeader，必须写全）
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
   });
   res.end(body);
 }
@@ -664,6 +667,10 @@ function listDir(target) {
 /* ------------------------------------------------------------------ */
 
 async function handleApi(req, res, url) {
+  // ★ 所有 API 响应禁止任何层级的缓存（浏览器/代理都可能把 A 的个人数据吐给 B）
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   const p = url.pathname;
   const q = url.searchParams;
 
@@ -945,6 +952,14 @@ async function handleApi(req, res, url) {
   /* ---- 统一歌单接口（PlaylistSession） ---- */
   if (p === '/api/playlists') {
     const platform = q.get('platform') || 'netease';
+    // ★ 无凭证闸门：个人歌单绝不允许无 cookie/token 的请求触碰（本地曲库除外）
+    if (platform === 'netease' || platform === 'qq') {
+      const cred = platform === 'netease'
+        ? String(req.headers['x-ncm-cookie'] || '').trim()
+        : String(req.headers['x-qq-session'] || '').trim();
+      console.log(`[playlists] platform=${platform} 凭证头=${cred ? '有(' + cred.slice(0, 12) + '…)' : '(空)'}`);
+      if (!cred) return sendError(res, '未登录，无法获取个人歌单', 401);
+    }
     const adapter = providers[platform];
     if (!adapter) return sendError(res, '未知平台', 400);
     if (!adapter.capabilities.playlists) {
@@ -959,6 +974,14 @@ async function handleApi(req, res, url) {
 
   if (p === '/api/playlist/tracks') {
     const platform = q.get('platform') || 'netease';
+    // ★ 同类泄漏面：/playlist/track/all 知道 pid 即可公开拉取，无凭证一律 401
+    if (platform === 'netease' || platform === 'qq') {
+      const cred = platform === 'netease'
+        ? String(req.headers['x-ncm-cookie'] || '').trim()
+        : String(req.headers['x-qq-session'] || '').trim();
+      console.log(`[playlist/tracks] platform=${platform} 凭证头=${cred ? '有' : '(空)'}`);
+      if (!cred) return sendError(res, '未登录，无法获取歌单内容', 401);
+    }
     const adapter = providers[platform];
     if (!adapter) return sendError(res, '未知平台', 400);
     try {

@@ -177,10 +177,12 @@ class NeteaseProvider {
 
   /** 当前登录用户 uid（缓存） */
   async uid() {
-    if (this._uidCache) return this._uidCache;
+    // ★ 串号直接根因（已铲除）：此前 uid 缓存在 provider 单例上，
+    //   A 拉过一次歌单后，B 的无凭证请求会命中缓存拿到 A 的 uid，
+    //   而网易云 /user/playlist?uid=X 无需登录态即可按 uid 拉公开歌单 → 串号。
+    //   现在每次实打实校验登录态并取当前请求自己的 uid。
     const st = await this.status();
     if (!st.loggedIn || !st.userId) throw new Error('网易云未登录，登录后可用歌单');
-    this._uidCache = st.userId;
     return st.userId;
   }
 
