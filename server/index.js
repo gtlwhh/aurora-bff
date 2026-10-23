@@ -799,6 +799,19 @@ async function handleApi(req, res, url) {
       });
       if (src.filePath) return streamLocalFile(src.filePath, req, res);
       if (src.url) {
+        // ★ 直连 CDN 模式（省流量 + 提速，v3.1）：拿到真实播放地址后 302 给客户端，
+        //   音频字节不再经服务器转发。VIP 保障：getStream 在请求上下文里已携带
+        //   用户的 Cookie/Token（x-ncm-cookie / x-qq-session），取到的链接自带鉴权。
+        //   回退开关：settings.directStream = false（服务器级）或 ?proxy=1（单次请求）
+        //   → 走旧的 pipe 代理。ExoPlayer 侧自定义 Referer/UA 头会随 302 一起带到 CDN。
+        const wantProxy = q.get('proxy') === '1' || store.read().directStream === false;
+        if (!wantProxy && providerId !== 'local') {
+          res.writeHead(302, {
+            Location: src.url,
+            'Cache-Control': 'no-store'
+          });
+          return res.end();
+        }
         const extra = {};
         if (providerId === 'netease') {
           extra['Referer'] = 'https://music.163.com/';
