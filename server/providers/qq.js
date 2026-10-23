@@ -112,12 +112,15 @@ class QqProvider {
       }
       if (token) {
         this._setToken(token);
-        // 令牌属于本次登录请求：写进请求上下文带回给发起扫码的客户端（不驻留实例）
+        // 令牌属于本次登录请求：写进请求上下文带回（ALS 可用时），
+        // ★ 同时挂到返回值上 —— AccountManager 的轮询 tick 跑在定时器上下文里
+        //   （ALS store 为 undefined），靠返回值传递才能拿到令牌（网易云同理靠响应头）。
         try {
           const { als } = require('../lib/req-context');
           const st = als.getStore();
           if (st) st.qqLoginToken = token;
         } catch (_) {}
+        try { data.__qqToken = token; } catch (_) {}
       }
     }
 

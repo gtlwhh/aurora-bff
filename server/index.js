@@ -203,8 +203,11 @@ accounts.registerBackend('qq', {
     } catch (_) {}
     // 令牌从本次请求的上下文里取（api() 扫码成功时写入），桌面端回退实例 getter
     const store = reqCtx.als.getStore();
-    const session = (store && store.qqLoginToken) || (qqProviderInstance ? qqProviderInstance.token : '');
+    // 优先级：返回值携带（定时器轮询场景 ALS 不可用）> 请求上下文 > 实例回退
+    const session = r.__qqToken || (store && store.qqLoginToken)
+      || (qqProviderInstance ? qqProviderInstance.token : '');
     if (store) delete store.qqLoginToken;
+    console.log(`[accounts] QQ 803 令牌长度: ${(session || '').length}`);
     // ★ QQ 登录"无反应"根因：前端读 st.credential，这里却只给 session——字段名对不上
     return { code: 803, handled: true, user, session, credential: session };
   }
