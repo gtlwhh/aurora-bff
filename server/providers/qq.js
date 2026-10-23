@@ -261,6 +261,17 @@ class QqProvider {
         }
       }
     }
+    // ②.5 musicu.fcg 匿名直连（comm 带 tmeLoginType:-1 + 随机 search_id，curl 实测稳定出歌）
+    try {
+      const lite = await this.searchMusicuLite(keyword, limit);
+      if (lite.length) {
+        console.log('[qq] 游客搜索：✓ musicu.fcg 匿名直连兜底成功');
+        return lite.map(x => this.mapSong(x));
+      }
+      trace.push('musicuLite空结果');
+    } catch (err) {
+      trace.push('musicuLite:' + (err.message || err));
+    }
     // ③ soso 公共接口（不同主机 c.y.qq.com）
     try {
       const pub = await this.searchPublic(keyword, limit);
@@ -307,6 +318,73 @@ class QqProvider {
       const fs = require('fs');
       return fs.readFileSync(this._guestTokenPath(), 'utf8').trim() || '';
     } catch (_) { return ''; }
+  }
+
+  /**
+   * 兜底②：musicu.fcg 匿名直连（完整复刻内嵌包精简版客户端，已 curl 实测稳定出歌）。
+   * 两个命门：① comm 里必须带 tmeLoginType:-1（只放 Cookie 不够，缺了回 2001 空结果）；
+   *          ② search_id 每次随机（重复使用会被限流返回空清单）。
+   * 匿名搜歌 search_type 必须送 7（上游已不认 0）。
+   */
+  searchMusicuLite(keyword, limit = 30) {
+    const sid = `${Math.floor(Math.random() * 9 + 1)}${Array.from({ length: 17 }, () => Math.floor(Math.random() * 10)).join('')}`;
+    const payload = JSON.stringify({
+      comm: {
+        ct: 11,
+        cv: '1003006',
+        v: '1003006',
+        tmeAppID: 'qqmusiclight',
+        tmeLoginType: -1,
+        nettype: 'NETWORK_WIFI',
+        uid: '0',
+        udid: '0'
+      },
+      req_0: {
+        module: 'music.search.SearchCgiService',
+        method: 'DoSearchForQQMusicLite',
+        param: {
+          search_id: sid,
+          remoteplace: 'search.android.keyboard',
+          query: String(keyword || ''),
+          search_type: 7,
+          num_per_page: Math.min(Math.max(limit, 1), 20),
+          page_num: 1,
+          highlight: 0,
+          nqc_flag: 0,
+          page_id: 1,
+          grp: 1
+        }
+      }
+    });
+    const u = new URL('https://u.y.qq.com/cgi-bin/musicu.fcg');
+    return new Promise((resolve, reject) => {
+      const req = https.request(u, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': 'tmeLoginType=-1',
+          'User-Agent': 'okhttp/3.14.9',
+          'Referer': 'https://y.qq.com/'
+        }
+      }, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          try {
+            const d = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            const r = d && d.req_0;
+            if (!r || (r.code !== undefined && r.code !== 0)) {
+              throw new Error('musicu 内层 code=' + ((r && r.code) || '?'));
+            }
+            resolve((r.data && r.data.body && r.data.body.item_song) || []);
+          } catch (e) { reject(new Error('musicu 匿名搜索解析失败: ' + (e.message || e))); }
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(12000, () => req.destroy(new Error('musicu 匿名搜索超时')));
+      req.write(payload);
+      req.end();
+    });
   }
 
   /**
