@@ -172,7 +172,7 @@ accounts.registerBackend('netease', {
         console.log(`[accounts] 网易云登录成功: ${st.nickname || st.userId}`);
       }
     } catch (_) {}
-    return { code: 803, cookie, user };
+    return { code: 803, cookie, credential: cookie, user };
   }
 });
 
@@ -205,7 +205,8 @@ accounts.registerBackend('qq', {
     const store = reqCtx.als.getStore();
     const session = (store && store.qqLoginToken) || (qqProviderInstance ? qqProviderInstance.token : '');
     if (store) delete store.qqLoginToken;
-    return { code: 803, handled: true, user, session };
+    // ★ QQ 登录"无反应"根因：前端读 st.credential，这里却只给 session——字段名对不上
+    return { code: 803, handled: true, user, session, credential: session };
   }
 });
 
