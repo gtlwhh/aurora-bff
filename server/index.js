@@ -1030,12 +1030,13 @@ async function handleApi(req, res, url) {
   if (p === '/api/playlists') {
     const platform = q.get('platform') || 'netease';
     // ★ 无凭证闸门：个人歌单绝不允许无 cookie/token 的请求触碰（本地曲库除外）
+    //   STATELESS（ECS/移动端）维持硬闸门：只认透传头；桌面单用户回退服务端会话凭证。
     if (platform === 'netease' || platform === 'qq') {
       const cred = platform === 'netease'
         ? String(req.headers['x-ncm-cookie'] || '').trim()
         : String(req.headers['x-qq-session'] || '').trim();
       console.log(`[playlists] platform=${platform} 凭证头=${cred ? '有(' + cred.slice(0, 12) + '…)' : '(空)'}`);
-      if (!cred) return sendError(res, '未登录，无法获取个人歌单', 401);
+      if (!cred && STATELESS) return sendError(res, '未登录，无法获取个人歌单', 401);
     }
     const adapter = providers[platform];
     if (!adapter) return sendError(res, '未知平台', 400);
