@@ -34,10 +34,17 @@ const REFILL_RETRY_MAX = 2;               // 单轮补货失败重试上限
 const SESSION_VER = 2;
 
 class PlaylistSession {
-  constructor() {
+  /**
+   * @param opts.asyncCtx { getStore(), run(store, fn) }  AsyncLocalStorage 载体。
+   * 后台补货跑在 setTimeout 里——ALS 上下文会丢失（QQ/网易云凭证取不到，
+   * 表现为"心动模式只推单平台"）。创建会话/取歌时把请求上下文快照带进来，
+   * 补货时用 ctx.run(快照) 还原凭证。
+   */
+  constructor(opts = {}) {
     /** id -> { id, platform, type, seed, buffer:[], cursor, playedIds:Set, ... } */
     this._sessions = new Map();
     this._adapters = {};
+    this._asyncCtx = opts.asyncCtx || null;
     this._restore();
   }
 
@@ -213,9 +220,17 @@ class PlaylistSession {
   }
 
   _refillInBackground(session, adapter) {
-    setTimeout(async () => {
+    // ★ 把发起请求的 ALS 上下文快照带进 setTimeout：没有这一步，后台补货时
+    //   QQ/网易云凭证（x-qq-session 等）全部蒸发，QQ 侧永远空手 → 单平台降级。
+    const ctx = this._asyncCtx;
+    const snapshot = ctx ? ctx.getStore() : null;
+    const job = async () => {
       try { await this._refill(session, adapter || this._adapterFor(session)); }
       catch (_) {}
+    };
+    setTimeout(() => {
+      if (ctx && snapshot) ctx.run(snapshot, job);
+      else job();
     }, 0);
   }
 

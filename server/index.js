@@ -139,7 +139,11 @@ process.on('exit', () => qqApi.shutdown());
 /* ------------------------------------------------------------------ */
 
 const accounts = new AccountManager();
-const playlistSession = new PlaylistSession();
+const playlistSession = new PlaylistSession({
+  // ★ 后台补货在 setTimeout 里跑，ALS 会丢——把请求上下文载体传进去，
+  //   补货时还原 QQ/网易云凭证（否则心动模式 QQ 侧永远空手 → 单平台）
+  asyncCtx: reqCtx.als
+});
 
 // 网易云登录后端：二维码 + 轮询（复用现有 provider 的接口封装）
 accounts.registerBackend('netease', {
@@ -336,7 +340,10 @@ function buildMixAdapter() {
           newCursor[x.value.side] = x.value.r.cursor || {};
         } else if (x.status === 'rejected') {
           // 单侧失败绝不报错：另一侧继续（如 QQ 未登录 / 接口波动）
-          console.warn('[mix] 一侧推荐失败（另一侧继续）:', x.reason && x.reason.message);
+          // 探针：确认后台补货时 ALS 快照里到底有没有 QQ 凭证（排查"只推单平台"）
+          const __st = reqCtx.als.getStore();
+          console.warn('[mix] 一侧推荐失败（另一侧继续）:', x.reason && x.reason.message,
+            '| 后台补货QQ凭证:', (__st && __st.qq) ? '存在(' + String(__st.qq).length + '字符)' : '缺失');
         }
       });
 
