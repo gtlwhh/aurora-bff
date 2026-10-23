@@ -79,7 +79,9 @@ class QqProvider {
       if (v !== undefined && v !== null && v !== '') u.searchParams.append(k, String(v));
     }
     const headers = { 'Accept': 'application/json' };
-    if (this.token) headers['x-qq-session'] = this.token;   // 认证调用统一走这个头
+    // 显式传入的令牌优先（扫码刚成功、请求头里还没有凭证时用）
+    const authToken = opt.token || this.token;
+    if (authToken) headers['x-qq-session'] = authToken;     // 认证调用统一走这个头
 
     const res = await new Promise((resolve, reject) => {
       const req = http.request(u, { method: 'GET', headers }, (res) => {
@@ -124,7 +126,12 @@ class QqProvider {
       }
     }
 
-    if (data && data.code && data.code !== 200) {
+    // ★ 扫码轮询接口 /login/qr/check 用 800/801/802/803 表达「状态」而非「错误」：
+    //   801=等待扫码 802=已扫码待确认 803=确认成功。此前这里的通用门禁把它们全当
+    //   业务失败 throw 掉，803 的令牌随异常一起蒸发，服务端 tick 的 catch 再把
+    //   异常吞掉 → 前端永远只看到 801（已扫码/已确认全都"不存在"）。
+    //   该路径必须原样放行，状态判断交给上层（server/index.js 的 qrCheck）。
+    if (pathname !== '/login/qr/check' && data && data.code && data.code !== 200) {
       const err = new Error(data.message || data.error || ('QQ 接口错误 code=' + data.code));
       err.code = data.errorKey || ('QQ_CODE_' + data.code);
       err.retryable = !!data.retryable;
@@ -290,10 +297,11 @@ class QqProvider {
   }
 
   /** 由路由 id + meta 构建曲目（buildTrack 由组合层提供，这里补 QQ 专属字段映射） */
-  async status() {
+  async status(opts = {}) {
     if (!this.baseUrl) return { ok: false, reason: 'QQ 服务未启动' };
     try {
-      const data = await this.api('/login/status');
+      // opts.token：扫码刚成功时显式传入刚换到的会话令牌
+      const data = await this.api('/login/status', {}, { token: opts.token });
       const profile = (data && data.data && data.data.profile) || null;
       return {
         ok: true,

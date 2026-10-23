@@ -191,22 +191,24 @@ accounts.registerBackend('qq', {
   async qrCheck(key) {
     const r = await qqProviderInstance.api('/login/qr/check', { key });
     const code = Number(r.code);
+    // 801=等待扫码 802=已扫码待确认 800=已过期：原样透传给轮询会话（qq.js 已放行这些状态码）
     if (code !== 803) return { code, message: r.message || '' };
-    // 凭证已由包内会话仓库加密保存；拉一次用户信息
-    let user = null;
-    try {
-      const st = await qqProviderInstance.status();
-      if (st.loggedIn) {
-        user = { nickname: st.nickname, avatarUrl: st.avatarUrl, userId: st.userId };
-        console.log(`[accounts] QQ 扫码登录成功: ${st.nickname || st.userId}`);
-      }
-    } catch (_) {}
     // 令牌从本次请求的上下文里取（api() 扫码成功时写入），桌面端回退实例 getter
     const store = reqCtx.als.getStore();
     // 优先级：返回值携带（定时器轮询场景 ALS 不可用）> 请求上下文 > 实例回退
     const session = r.__qqToken || (store && store.qqLoginToken)
       || (qqProviderInstance ? qqProviderInstance.token : '');
     if (store) delete store.qqLoginToken;
+    // 凭证已由包内会话仓库加密保存；带着刚换到的令牌拉一次用户信息
+    // （无状态模式下实例 getter 拿不到这个令牌，必须显式传）
+    let user = null;
+    try {
+      const st = await qqProviderInstance.status({ token: session });
+      if (st.loggedIn) {
+        user = { nickname: st.nickname, avatarUrl: st.avatarUrl, userId: st.userId };
+        console.log(`[accounts] QQ 扫码登录成功: ${st.nickname || st.userId}`);
+      }
+    } catch (_) {}
     console.log(`[accounts] QQ 803 令牌长度: ${(session || '').length}`);
     // ★ QQ 登录"无反应"根因：前端读 st.credential，这里却只给 session——字段名对不上
     return { code: 803, handled: true, user, session, credential: session };
