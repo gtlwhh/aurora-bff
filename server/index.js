@@ -940,7 +940,14 @@ async function handleApi(req, res, url) {
     }
 
     if (action === 'login/check') {
-      return sendJSON(res, accounts.checkLogin(platform, q.get('key')));
+      const st = accounts.checkLogin(platform, q.get('key'));
+      // ★ BFF 出口日志：pm2 logs 里直接可见"BFF 给前端回了什么"。
+      //   此前只有包内层日志（login-confirmed / qrCheck 803），BFF 与包之间
+      //   是否丢凭证完全不可见，排查时容易把包层成功误判为服务端没问题。
+      console.log(`[accounts] check → ${platform} code=${st.code}`
+        + ` 凭证=${st.credential ? st.credential.length + '字符' : '无'}`
+        + ` user=${(st.user && st.user.nickname) || '-'} saved=${st.saved}`);
+      return sendJSON(res, st);
     }
 
     if (action === 'logout') {
