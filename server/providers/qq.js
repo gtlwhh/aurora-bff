@@ -10,6 +10,7 @@ const { STATELESS } = require('../lib/accounts');
  */
 
 const http = require('http');
+const https = require('https');
 const { URL } = require('url');
 
 function getJSON(base, pathname, params = {}, timeout = 12000) {
@@ -233,9 +234,58 @@ class QqProvider {
   }
 
   async search(keyword, limit = 30, page = 1) {
-    const data = await this.api('/search', { keyword, limit, page });
-    const items = (data.items || data.data || []).map(x => this.mapSong(x));
-    return items;
+    try {
+      const data = await this.api('/search', { keyword, limit, page });
+      const items = (data.items || data.data || []).map(x => this.mapSong(x));
+      if (items.length) return items;
+      console.log('[qq] 主搜索空结果，尝试游客兜底');
+    } catch (err) {
+      // 无凭证时 ECS 机房 IP 常被 QQ 风控拒答（带用户 token 才放行）→ 落到公共接口
+      console.log('[qq] 主搜索失败(' + (err.message || err) + ')，尝试游客兜底');
+    }
+    // ★ 游客态兜底：经典公共搜索接口（soso），无需任何 Cookie，未登录/机房 IP 都能搜
+    const pub = await this.searchPublic(keyword, limit);
+    if (!pub.length) throw new Error('QQ 搜索无结果');
+    return pub.map(x => this.mapSong(x));
+  }
+
+  /**
+   * 游客兜底搜索：QQ 经典公共搜索接口（c.y.qq.com soso），无需任何登录态。
+   * 字段与 mapSong 兼容（songmid/songname/singer[]/albummid/interval）。
+   */
+  searchPublic(keyword, limit = 30) {
+    const u = new URL('https://c.y.qq.com/soso/fcgi-bin/client_search_cp');
+    u.searchParams.set('w', String(keyword || ''));
+    u.searchParams.set('format', 'json');
+    u.searchParams.set('p', '1');
+    u.searchParams.set('n', String(Math.min(Math.max(limit, 1), 50)));
+    u.searchParams.set('cr', '1');
+    u.searchParams.set('loginUin', '0');
+    return new Promise((resolve, reject) => {
+      const req = https.request(u, {
+        method: 'GET',
+        headers: {
+          'Referer': 'https://y.qq.com/',
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
+          'Accept': 'application/json'
+        }
+      }, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          try {
+            let body = Buffer.concat(chunks).toString('utf8').trim();
+            // 兼容 jsonp 包装：剥掉 callback(...) 外壳
+            if (!body.startsWith('{')) body = body.replace(/^[\w$.]+\(/, '').replace(/\)\s*;?\s*$/, '');
+            const d = JSON.parse(body);
+            resolve((d.data && d.data.song && d.data.song.list) || []);
+          } catch (e) { reject(new Error('QQ 公共搜索返回解析失败')); }
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(12000, () => req.destroy(new Error('QQ 公共搜索超时')));
+      req.end();
+    });
   }
 
   /**
