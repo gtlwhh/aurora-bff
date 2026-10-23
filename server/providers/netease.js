@@ -209,6 +209,7 @@ class NeteaseProvider {
         // 注意：/playlist/track/all 返回 songs（全量曲目对象），不是 tracks（只有 id）
         const data = await self.api('/playlist/track/all', { id: pid, limit, offset });
         const tracks = (data.songs || data.tracks || []).map(s => self.mapSong(s));
+        await self._fillCovers(tracks);   // 歌单接口同样不再返回 picUrl → 批量补全
         if (!tracks.length) {
           console.log('[netease] playlist/track/all 空响应，字段:', Object.keys(data || {}).join(','),
             '| code:', data && data.code, '| msg:', (data && (data.message || data.msg)) || '');
@@ -310,7 +311,7 @@ class NeteaseProvider {
   async search(keywords, limit = 30) {
     const data = await this.api('/search', { keywords, limit, type: 1 });
     const songs = (data.result && data.result.songs) || [];
-    return songs.map(s => this.mapSong(s));
+    return this._fillCovers(songs.map(s => this.mapSong(s)));
   }
 
   /** 歌曲详情（补封面 / 时长） */
@@ -325,6 +326,30 @@ class NeteaseProvider {
       picUrl: (s.al || s.album || {}).picUrl || '',
       duration: s.dt || s.duration || 0
     }));
+  }
+
+  /**
+   * ★ 网易云搜索/歌单接口已改版：al=null、album 里没有 picUrl（只剩 picId）。
+   *   用 song/detail（实测仍带 al.picUrl）批量补全封面，带 350y350 缩放参数。
+   *   补不全的字段交给前端渐变兜底，绝不留白。
+   */
+  async _fillCovers(list) {
+    try {
+      const missing = (list || []).filter(t => !t.picUrl && (t.nid || t.gid));
+      if (!missing.length) return list;
+      const ids = [...new Set(missing.map(t => String(t.nid || t.gid)))].slice(0, 200).join(',');
+      const data = await this.api('/song/detail', { ids });
+      const pic = new Map((data.songs || []).map(s => {
+        const al = s.al || s.album || {};
+        const u = String(al.picUrl || '').replace(/^http:\/\//, 'https://');
+        return [String(s.id), u ? u + '?param=350y350' : ''];
+      }));
+      for (const t of list) {
+        const p = pic.get(String(t.nid || t.gid));
+        if (p) { t.picUrl = p; t.hasCover = true; }
+      }
+    } catch (_) { /* 补不全不影响主流程 */ }
+    return list;
   }
 
   /** 获取播放直链（音质由此决定，播放器不干预） */
