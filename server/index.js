@@ -203,6 +203,8 @@ accounts.registerBackend('qq', {
     const session = r.__qqToken || (store && store.qqLoginToken)
       || (qqProviderInstance ? qqProviderInstance.token : '');
     if (store) delete store.qqLoginToken;
+    // ★ 顺手缓存一份搜索兜底令牌：未登录设备的游客搜索用（仅搜索，绝不写账号存储）
+    if (session && qqProviderInstance.saveGuestToken) qqProviderInstance.saveGuestToken(session);
     // 凭证已由包内会话仓库加密保存；带着刚换到的令牌拉一次用户信息
     // （无状态模式下实例 getter 拿不到这个令牌，必须显式传）
     let user = null;

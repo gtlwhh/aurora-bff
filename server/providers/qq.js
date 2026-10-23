@@ -234,23 +234,83 @@ class QqProvider {
   }
 
   async search(keyword, limit = 30, page = 1) {
+    const trace = [];
+    // ① 主搜索：内嵌服务（有会话带会话；无会话自带"精简版匿名身份"musicu.fcg）
     try {
       const data = await this.api('/search', { keyword, limit, page });
       const items = (data.items || data.data || []).map(x => this.mapSong(x));
       if (items.length) return items;
-      console.log('[qq] 主搜索空结果，尝试游客兜底');
+      trace.push('主搜索空结果');
     } catch (err) {
-      // 无凭证时 ECS 机房 IP 常被 QQ 风控拒答（带用户 token 才放行）→ 落到公共接口
-      console.log('[qq] 主搜索失败(' + (err.message || err) + ')，尝试游客兜底');
+      trace.push('主搜索:' + (err.message || err));
     }
-    // ★ 游客态兜底：经典公共搜索接口（soso），无需任何 Cookie，未登录/机房 IP 都能搜
-    const pub = await this.searchPublic(keyword, limit);
-    if (!pub.length) throw new Error('QQ 搜索无结果');
-    return pub.map(x => this.mapSong(x));
+    // ② 游客 Cookie 兜底：服务器曾缓存过的真实会话令牌（仅用于搜索，不写账号）
+    if (!this.token) {
+      const gt = this._loadGuestToken();
+      if (gt) {
+        try {
+          const data = await this.api('/search', { keyword, limit, page }, { token: gt });
+          const items = (data.items || data.data || []).map(x => this.mapSong(x));
+          if (items.length) {
+            console.log('[qq] 游客搜索：✓ 缓存令牌兜底成功');
+            return items;
+          }
+          trace.push('游客Cookie空结果');
+        } catch (err) {
+          trace.push('游客Cookie:' + (err.message || err));
+        }
+      }
+    }
+    // ③ soso 公共接口（不同主机 c.y.qq.com）
+    try {
+      const pub = await this.searchPublic(keyword, limit);
+      if (pub.length) {
+        console.log('[qq] 游客搜索：✓ soso 公共接口兜底成功');
+        return pub.map(x => this.mapSong(x));
+      }
+      trace.push('soso空结果');
+    } catch (err) {
+      trace.push('soso:' + (err.message || err));
+    }
+    // ④ GD Studio 公共搜索（仅搜索，绝不用于取链）
+    try {
+      const gd = await this.searchGD(keyword, limit);
+      if (gd.length) {
+        console.log('[qq] 游客搜索：✓ GD 公共搜索兜底成功');
+        return gd;
+      }
+      trace.push('GD空结果');
+    } catch (err) {
+      trace.push('GD:' + (err.message || err));
+    }
+    throw new Error('QQ 搜索失败（' + trace.join(' | ') + '）');
+  }
+
+  /** 搜索兜底令牌的存取（data/cache/ 下，仅用于游客搜索，绝不写进账号存储） */
+  _guestTokenPath() {
+    const { fileInData } = require('../lib/paths');
+    return fileInData('cache', 'qq-guest-token.txt');
+  }
+  saveGuestToken(token) {
+    try {
+      if (!token) return;
+      const fs = require('fs');
+      const path = require('path');
+      const p = this._guestTokenPath();
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, String(token), 'utf8');
+      console.log('[qq] 已缓存搜索兜底令牌（' + String(token).length + ' 字符，仅用于游客搜索）');
+    } catch (_) {}
+  }
+  _loadGuestToken() {
+    try {
+      const fs = require('fs');
+      return fs.readFileSync(this._guestTokenPath(), 'utf8').trim() || '';
+    } catch (_) { return ''; }
   }
 
   /**
-   * 游客兜底搜索：QQ 经典公共搜索接口（c.y.qq.com soso），无需任何登录态。
+   * 兜底③：QQ 经典公共搜索接口（c.y.qq.com soso），无需任何登录态。
    * 字段与 mapSong 兼容（songmid/songname/singer[]/albummid/interval）。
    */
   searchPublic(keyword, limit = 30) {
@@ -284,6 +344,50 @@ class QqProvider {
       });
       req.on('error', reject);
       req.setTimeout(12000, () => req.destroy(new Error('QQ 公共搜索超时')));
+      req.end();
+    });
+  }
+
+  /**
+   * 兜底④：GD Studio 公共搜索（Metting 格式，source=qqmusic）。
+   * 仅用于"搜出歌"，绝不用于取链；连通性因 IP 而异，失败静默降级。
+   */
+  searchGD(keyword, limit = 30) {
+    const base = process.env.GD_BASE_URL || 'https://music-api.gdstudio.xyz/api.php';
+    const u = new URL(base);
+    u.searchParams.set('types', 'search');
+    u.searchParams.set('source', 'qqmusic');
+    u.searchParams.set('name', String(keyword || ''));
+    u.searchParams.set('count', String(Math.min(Math.max(limit, 1), 30)));
+    u.searchParams.set('pages', '1');
+    return new Promise((resolve, reject) => {
+      const req = https.request(u, {
+        method: 'GET',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
+          'Accept': 'application/json'
+        }
+      }, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          try {
+            const d = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            const arr = Array.isArray(d) ? d : [];
+            // Meting(qqmusic) 字段 → mapSong 形状
+            resolve(arr.map(raw => ({
+              songmid: raw.id,
+              name: raw.name,
+              singer: String(raw.artist || '').split('/').filter(Boolean).map(s => ({ name: s.trim() })),
+              albumname: raw.album || '',
+              albummid: raw.album_id || '',
+              interval: 0
+            })));
+          } catch (e) { reject(new Error('GD 公共搜索返回解析失败')); }
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(12000, () => req.destroy(new Error('GD 公共搜索超时')));
       req.end();
     });
   }
