@@ -323,12 +323,21 @@ function buildMixAdapter() {
         }).then(r => ({ side: 'ne', r })));
       }
       if (qq && qq.recommend) {
-        // 心动模式：有 QQ 种子 → 相似歌；无种子（如种子是网易云歌）→ 回落"猜你喜欢"，
-        // 保证心动模式也能双平台混合，而不是单侧直接失败。
-        const qqType = (type === 'heartmix' && cursor.seedMid) ? 'similar' : 'personalfm';
-        jobs.push(qq.recommend.next(qqType, {
-          seedMid: cursor.seedMid, ...(cursor.qq || {})
-        }).then(r => ({ side: 'qq', r })));
+        // 心动模式：优先"相似歌"（QQ 种子）；种子在 QQ 侧搜不到/相似歌失败/为空
+        // → 必须回落 QQ 全局推荐（guess-you-like），绝不让 QQ 侧空手。
+        const qqJob = async () => {
+          if (type === 'heartmix' && cursor.seedMid) {
+            try {
+              const r = await qq.recommend.next('similar', { seedMid: cursor.seedMid, ...(cursor.qq || {}) });
+              if (r && Array.isArray(r.tracks) && r.tracks.length) return r;
+              console.log('[mix] QQ 相似歌为空 → 回落 QQ 全局推荐');
+            } catch (err) {
+              console.log('[mix] QQ 相似歌失败(' + (err.message || err) + ') → 回落 QQ 全局推荐');
+            }
+          }
+          return qq.recommend.next('personalfm', { ...(cursor.qq || {}) });
+        };
+        jobs.push(qqJob().then(r => ({ side: 'qq', r })));
       }
       const rs = await Promise.allSettled(jobs);
       let neTracks = [], qqTracks = [];
@@ -346,6 +355,39 @@ function buildMixAdapter() {
             '| 后台补货QQ凭证:', (__st && __st.qq) ? '存在(' + String(__st.qq).length + '字符)' : '缺失');
         }
       });
+
+      // ★ 数量配平（严格拉链的前提）：两侧都有歌但数量悬殊时，
+      //   从短的一侧用该平台的全局推荐再补几批（每批去重，最多 3 次），
+      //   补到与长侧相当（上限 12 首）——这样 interleave 才是严格的 A1→B1→A2→B2。
+      if (neTracks.length && qqTracks.length) {
+        const dedupe = (arr, have) => {
+          const seen = new Set(have.map(t => t.gid || t.nid || t.id));
+          return arr.filter(t => { const k = t.gid || t.nid || t.id; if (seen.has(k)) return false; seen.add(k); return true; });
+        };
+        const balanceSide = async (side, have, other) => {
+          const want = Math.min(12, Math.max(other.length, 6)) - have.length;
+          if (want <= 0) return have;
+          let pool = have.slice();
+          let cur2 = side === 'ne' ? cursor.ne : cursor.qq;   // 批间推进游标，避免反复拉同一批
+          for (let i = 0; i < 3 && pool.length < Math.min(12, other.length); i++) {
+            try {
+              const r = side === 'ne'
+                ? await ne.recommend.next('personalfm', { ...(cur2 || {}) })
+                : await qq.recommend.next('personalfm', { ...(cur2 || {}) });
+              const fresh = dedupe((r && r.tracks) || [], pool);
+              pool = pool.concat(fresh);
+              if (r && r.cursor) cur2 = r.cursor;
+              if (!fresh.length) break;
+            } catch (_) { break; }
+          }
+          if (pool.length > have.length) {
+            console.log(`[mix] 数量配平：${side === 'ne' ? '网易云' : 'QQ'}侧 ${have.length} → ${pool.length}（另一侧 ${other.length}）`);
+          }
+          return pool;
+        };
+        if (neTracks.length < qqTracks.length) neTracks = await balanceSide('ne', neTracks, qqTracks);
+        else if (qqTracks.length < neTracks.length) qqTracks = await balanceSide('qq', qqTracks, neTracks);
+      }
 
       // 心动模式在"未登录网易云 / 种子不可用"时经常空手而归：
       // 自动降级一次私人电台，保证"点了心动就有歌"（其余用户反馈的点不动）
