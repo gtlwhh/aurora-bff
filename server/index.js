@@ -1053,12 +1053,13 @@ async function handleApi(req, res, url) {
   if (p === '/api/playlist/tracks') {
     const platform = q.get('platform') || 'netease';
     // ★ 同类泄漏面：/playlist/track/all 知道 pid 即可公开拉取，无凭证一律 401
+    //   （STATELESS/ECS 维持透传硬闸门；桌面单用户模式回退服务端会话凭证，同 /api/playlists）
     if (platform === 'netease' || platform === 'qq') {
       const cred = platform === 'netease'
         ? String(req.headers['x-ncm-cookie'] || '').trim()
         : String(req.headers['x-qq-session'] || '').trim();
       console.log(`[playlist/tracks] platform=${platform} 凭证头=${cred ? '有' : '(空)'}`);
-      if (!cred) return sendError(res, '未登录，无法获取歌单内容', 401);
+      if (!cred && STATELESS) return sendError(res, '未登录，无法获取歌单内容', 401);
     }
     const adapter = providers[platform];
     if (!adapter) return sendError(res, '未知平台', 400);
